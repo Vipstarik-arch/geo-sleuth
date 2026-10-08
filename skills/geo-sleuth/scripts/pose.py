@@ -288,8 +288,9 @@ def check(spec: dict, cands: dict, px_sigma: float) -> dict:
 def sanity(pose: dict, pts: list[dict], horizon_row: float | None = None) -> list[str]:
     """Self-consistency check before reporting a camera position. Mistakes made before: putting the depression angle of some target in the frame into pitch as the camera's pitch,
     and reporting a camera position whose elevation doesn't match the depression angle in the frame (a 4 m height difference with a 7.6° depression angle, off by a factor of four)."""
-    H = pose["_frame"]["image_size"][1]
-    e0, n0, h_cam, _yaw, pitch, _roll, f = pose["_params"]
+    W, H = pose["_frame"]["image_size"]
+    params = np.asarray(pose["_params"], dtype=float)
+    e0, n0, h_cam, _yaw, pitch, _roll, f = params
     lat0, lon0 = pose["_frame"]["lat0"], pose["_frame"]["lon0"]
     kx, ky = _frame(lat0)
     out = [(f"Self-check pitch={pitch:.1f}°: the true horizon (sea horizon / distant flat horizon) should fall on row "
@@ -303,18 +304,29 @@ def sanity(pose: dict, pts: list[dict], horizon_row: float | None = None) -> lis
             out.append(f"  !! pitch contradicts the sea horizon by {d:.1f}° > 2°: calibrate pitch from the sea horizon first, then project/solve")
     out.append(f"Self-check camera height {h_cam:.1f} (same datum as each point's h); the \"expected row\" in the table below must match the actual row of that feature in the photo:")
     for q in pts:
-        e = (q["ll"][1] - lon0) * kx - e0
-        n = (q["ll"][0] - lat0) * ky - n0
-        dist = math.hypot(e, n)
+        e = (q["ll"][1] - lon0) * kx                 # absolute ENU in this frame: project() wants the camera and
+        n = (q["ll"][0] - lat0) * ky                 # the point in the same frame, not camera-relative coordinates
+        dist = math.hypot(e - e0, n - n0)
         if dist < 1.0:
             continue
         dh = h_cam - q.get("h", 0.0)
         dep = math.degrees(math.atan2(dh, dist))
-        row = H / 2 + f * math.tan(math.radians(dep + pitch))
+        # Project with the very same camera model the solver uses. H/2 + f*tan(dep+pitch) ignores the horizontal
+        # offset of the point, so it printed "off by 10–50 px" for points 20–30° off the optical axis even on a
+        # perfect solution (rms 0.00 px). Roll and the real projection are only handled correctly here.
+        uv, depth = project(params, np.array([[e, n, q.get("h", 0.0)]]), W, H)
+        col, row = (float(uv[0][0]), float(uv[0][1])) if depth[0] > 1e-3 and np.isfinite(uv[0]).all() else (float("nan"), float("nan"))
+        head = f"  {q.get('name', '?'):<14} horizontal {dist:6.0f} m  height diff {dh:6.1f} m  geometric depression {dep:5.1f}°  "
+        if not math.isfinite(row):
+            out.append(head + "not projectable: this point is behind the camera (check the camera position or the point)")
+            continue
+        if not (0 <= row < H and 0 <= col < W):
+            out.append(head + f"expected row {row:6.0f} (column {col:.0f}: outside the frame)")
+            continue
         note = ""
         if "px" in q and len(q["px"]) > 1:
             note = f"  actual row {q['px'][1]:.0f}, off by {abs(row - q['px'][1]):.0f} px"
-        out.append(f"  {q.get('name', '?'):<14} horizontal {dist:6.0f} m  height diff {dh:6.1f} m  geometric depression {dep:5.1f}°  expected row {row:6.0f}{note}")
+        out.append(head + f"expected row {row:6.0f}{note}")
     return out
 
 

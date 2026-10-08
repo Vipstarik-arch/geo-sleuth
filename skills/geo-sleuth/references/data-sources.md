@@ -120,7 +120,7 @@ The endpoints are all at `https://mapsv0.bdimg.com/`, need no key, and must be a
 | OpenStreetMap Overpass | Feature co-occurrence, line-to-point, route corridors, line crossings, street-view templates, points along a road, large buildings | `osm.py`; public servers are often busy or rate-limited (the script retries on mirrors; a result with a remark gets a warning that it may be incomplete); **ranges of hundreds of kilometers with a name regex (`[~"name"~...]`) often time out**; drop the regex or query by sub-area; in Chinese counties and townships, buildings and parking are basically empty, and rivers often have only centerlines |
 | OpenRailwayMap (openrailwaymap.org) | Railway class, single/double track, electrification, stations | Viewed manually on the web; same data as OSM |
 | OpenInfraMap (openinframap.org) | Power lines and voltage, substations | Viewed manually on the web; voltage may be untagged |
-| AWS Terrain Tiles (Terrarium) | Global elevation, about 30 m | `terrain.py`; details smaller than a hundred meters are unreliable |
+| AWS Terrain Tiles (Terrarium) | Global elevation, about 30 m | `terrain.py`; details smaller than a hundred meters are unreliable; a tile that fails to download is padded with 0 m (looks like flat ground) — the script warns with the curl error and stops the run if every tile failed, and `elevation_tiles` in the output JSON records how many were missing |
 | City open data | Street trees (species, trunk diameter at breast height, location), etc. | Many foreign cities, few Chinese ones |
 
 ## Time and weather

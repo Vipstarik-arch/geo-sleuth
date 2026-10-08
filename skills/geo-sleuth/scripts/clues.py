@@ -334,11 +334,13 @@ def load(table: str) -> dict:
 
 
 def _fetch(url: str, proxy: str | None) -> str:
-    cmd = ["curl", "-q", "-s", "-m", "90", "-A", UA, "-L"]
+    cmd = ["curl", "-q", "-sS", "-m", "90", "-A", UA, "-L"]      # -sS: keep curl's own error text as the reason
     cmd += curl_args(proxy)
     r = subprocess.run(cmd + [url], capture_output=True)
     if r.returncode != 0 or len(r.stdout) < 1000:
-        sys.exit(f"fetch failed: {url} (check service availability with doctor.py --network)")
+        reason = " ".join(r.stderr.decode("utf-8", "replace").split())[:200]
+        why = f"curl exit {r.returncode}: {reason}" if r.returncode else f"only {len(r.stdout)} bytes returned"
+        sys.exit(f"fetch failed: {url} ({why}); check service availability with doctor.py --network")
     return r.stdout.decode("utf-8", "replace")
 
 

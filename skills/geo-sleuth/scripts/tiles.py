@@ -45,10 +45,13 @@ SOURCES = {
 def _get(url: str, path: Path, proxy: str | None) -> bool:
     if path.exists() and path.stat().st_size > 1000:
         return True
-    cmd = ["curl", "-q", "-s", "-m", "60", "-o", str(path), url]
+    cmd = ["curl", "-q", "-sS", "-m", "60", "-o", str(path), url]
     cmd += curl_args(proxy)
-    subprocess.run(cmd, check=False)
-    return path.exists() and path.stat().st_size > 1000
+    r = subprocess.run(cmd, capture_output=True)
+    ok = r.returncode == 0 and path.exists() and path.stat().st_size > 1000
+    if not ok:
+        path.unlink(missing_ok=True)                       # a partial file must not pass the size check on the next run
+    return ok
 
 
 def fetch(center: tuple[float, float], zoom: int, radius: int, out: Path, source: str,
@@ -78,6 +81,9 @@ def fetch(center: tuple[float, float], zoom: int, radius: int, out: Path, source
             except Exception:
                 failed += 1
     img.save(out, quality=90)
+    if failed:
+        print(f"WARNING tiles: {failed}/{len(jobs)} satellite tiles could not be downloaded and stay black in {out}; "
+              "this is a failed fetch, not empty ground (check the network or the proxy, then rerun)", file=sys.stderr)
     meta = {"zoom": zoom, "origin_tile": [xs[0], ys[0]], "center": list(center), "source": source,
             "size": list(img.size), "m_per_px": geo.meters_per_px(zoom, center[0]), "failed_tiles": failed}
     out.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
