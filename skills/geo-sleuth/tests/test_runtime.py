@@ -440,6 +440,109 @@ class ScriptBehaviourTests(unittest.TestCase):
             self.assertEqual(gsv._curl("https://example.invalid/x", "direct"), b"")
         self.assertIn("curl exit 7", err.getvalue())
 
+    def test_street_view_curl_treats_http_errors_as_failures(self):
+        # without -f an HTTP error page is written out as if it were the image, and the tile silently becomes a broken picture
+        source = (self.scripts / "gsv.py").read_text(encoding="utf-8")
+        self.assertIn('"curl", "-q", "-sS", "-f", "-m", "40"', source.split("def render", 1)[0])
+
+
+class PierColumnTests(unittest.TestCase):
+    """The pier column must be the centre of the bar: the spacing geometry measures span/position from it."""
+
+    def test_flat_topped_bar_reports_its_centre_not_its_right_edge(self):
+        import imgprep
+        d = [0.0] * 60
+        for c in (10, 34):                                  # two 8 px flat-topped piers, as in a real photo
+            d[c:c + 8] = [200.0] * 8
+        cols = [i for i, _ in imgprep._peaks(d, 1, 20)]
+        self.assertEqual(cols, [14, 38])                    # centres 13.5 and 37.5 (banker's rounding)
+        self.assertNotIn(17, cols)                          # 17 is the bar's last column, where the old code pointed
+
+    def test_isolated_spike_keeps_its_own_column(self):
+        import imgprep
+        d = [0.0] * 20
+        d[7] = 90.0
+        self.assertEqual([i for i, _ in imgprep._peaks(d, 1, 20)], [7])
+
+    def test_piers_on_a_synthetic_deck_land_on_the_bar_centre(self):
+        from PIL import Image
+        import imgprep
+        cols = [40, 120, 200]
+        im = Image.new("L", (260, 100), 0)
+        for c in cols:
+            for x in range(c, c + 10):
+                for y in range(50, 100):
+                    im.putpixel((x, y), 200)
+        res = imgprep.piers(im.convert("RGB"), (50, 100), None, 5, 30, 25, "bright")
+        self.assertEqual([p["col"] for p in res["piers"]], [44, 124, 204])   # 44.5, 124.5, 204.5 rounded
+
+
+class FailedRenderTests(unittest.TestCase):
+    """A render that failed must come back as None with a reason: match.py ranks every non-None tile as a candidate."""
+
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+
+    def test_street_view_render_returns_none_not_a_grey_placeholder(self):
+        import gsv
+        failed = SimpleNamespace(returncode=35, stdout=b"", stderr=b"curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL")
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(gsv.subprocess, "run", return_value=failed), \
+                patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertIsNone(gsv.render("CAoSK0l3dummy0000000000", 90.0, 0.0, 90.0, 640, 480, "direct", Path(folder)))
+            self.assertEqual(list(Path(folder).iterdir()), [])          # nothing left behind for the next run to open
+        self.assertIn("no image rendered", err.getvalue())
+
+    def test_street_view_drops_a_truncated_cache_entry(self):
+        import gsv
+        with tempfile.TemporaryDirectory() as folder:
+            cached = Path(folder) / "CAoSK0l3dummy0000000000_90_0_90_640x480.jpg"
+            cached.write_bytes(b"not a jpeg" * 400)                     # > 2000 bytes, but not an image
+            failed = SimpleNamespace(returncode=7, stdout=b"", stderr=b"curl: (7) Failed to connect")
+            with patch.object(gsv.subprocess, "run", return_value=failed), patch("sys.stderr", new_callable=io.StringIO):
+                self.assertIsNone(gsv.render("CAoSK0l3dummy0000000000", 90.0, 0.0, 90.0, 640, 480, "direct", Path(folder)))
+            self.assertFalse(cached.exists())
+
+    def test_street_view_sheet_marks_failed_tiles_and_warns(self):
+        import gsv
+        items = [{"id": "CAoSK0l3dummy0000000000", "heading": 90.0}, {"id": "CAoSseconddummy00000000", "heading": 180.0}]
+        with tempfile.TemporaryDirectory() as folder, patch.object(gsv, "render", return_value=None), \
+                patch("sys.stderr", new_callable=io.StringIO) as err:
+            out = Path(folder) / "sheet.jpg"
+            gsv.sheet(items, out, "direct", Path(folder) / "cache")
+            self.assertTrue(out.exists())
+        self.assertIn("2/2 tiles", err.getvalue())
+        self.assertIn("not evidence of no coverage", err.getvalue())
+
+    def test_baidu_render_returns_none_and_says_it_is_not_evidence_of_absence(self):
+        import baidu_pano
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(baidu_pano, "_get", side_effect=RuntimeError("Request failed (curl exit 35: SSL_ERROR_SYSCALL)")), \
+                patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertIsNone(baidu_pano.render("0123456789abcdef0123456789", 90.0, cache=Path(folder) / "cache", proxy="direct"))
+        self.assertIn("not evidence that the panorama is absent", err.getvalue())
+
+    def test_baidu_render_rejects_an_answer_that_is_not_an_image(self):
+        import baidu_pano
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(baidu_pano, "_get", return_value=b"<html>captcha</html>"), \
+                patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertIsNone(baidu_pano.render("0123456789abcdef0123456789", 90.0, cache=Path(folder) / "cache", proxy="direct"))
+        self.assertIn("did not return an image", err.getvalue())
+
+    def test_match_refuses_an_empty_candidate_list_with_a_clear_message(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            Image.new("RGB", (200, 200), (120, 160, 90)).save(folder / "query.jpg")
+            (folder / "items.json").write_text("[]", encoding="utf-8")
+            result = subprocess.run([sys.executable, str(self.scripts / "match.py"), "rank",
+                                     "--query", str(folder / "query.jpg"), "--items", str(folder / "items.json"),
+                                     "--out", str(folder / "rank.json")],
+                                    capture_output=True, text=True, encoding="utf-8", timeout=300)
+        self.assertEqual(result.returncode, 1, result.stderr[-500:])
+        self.assertIn("0 candidates", result.stderr)
+        self.assertNotIn("IndexError", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,15 +6,15 @@
 |---|--- |
 | `doctor.py` | Environment checks, browser launch, optional endpoint probes; English fixes and JSON output |
 | `exif.py` | GPS, capture time, equivalent focal length, camera heading |
-| `imgprep.py` | zoom (enlarge to read text) / edges (four edges, four corners) / variants (image-search variants) / grid (split into tiles) / `piers` (brightness profile along a given row to find pixel columns of evenly spaced structures; outputs a check image) |
+| `imgprep.py` | zoom (enlarge to read text) / edges (four edges, four corners) / variants (image-search variants) / grid (split into tiles) / `piers` (brightness profile along a given row to find pixel columns of evenly spaced structures — each `col` is the centre of the structure's peak, so a flat-topped pier is not reported half a pier to the right; outputs a check image) |
 | `revimg.py` | Baidu image search + Yandex reverse image search; `--query` Chinese keyword search (Bing China, Baidu/Sogou Images) |
 | `geo.py` | Coordinate conversion, bearing and distance, camera geometry (`range --hfov a:b` distance range), `line` alignment line, `intersect` sight-line intersection, `frame` computes the frame and occlusion before excluding, `spacing` pixel columns of evenly spaced structures × known polyline → solve for camera position (optionally scored jointly with the skyline) |
 | `poi.py` | Place names, residential compound names, housing development names, shop names → candidate coordinates (360 Maps + OSM Nominatim + Baidu suggestions); lists every same-name point nationwide |
 | `sun.py` | Sun position, shadow-length ratio, `locate` location band, `when` time, `street` street orientation, `facing` heading from lit faces, `dish` satellite dish |
 | `osm.py` | Overpass: find / near (co-occurrence) / crossings (line-to-point) / route (route corridor) / intersect (crossings of two kinds of lines; bends are only labeled, `--rank-near` ranks) / street-scan (street-view geometry template) / geom (export geometry) |
 | `tiles.py` | Satellite tile mosaic, `mark` plots points + overlays GeoJSON lines + field-of-view wedge, `sheet` numbered thumbnails of candidate points |
-| `baidu_pano.py` | Baidu panoramas: near / info / scan / render / sheet (`--headings` to look around from one point, `--road` `--spread`) / sample (street view sampling of candidate cities) |
-| `gsv.py` | Google Street View (outside China): near / render / sheet, no key, official coverage only |
+| `baidu_pano.py` | Baidu panoramas: near / info / scan / render / sheet (`--headings` to look around from one point, `--road` `--spread`) / sample (street view sampling of candidate cities); a view that fails to render comes back as nothing with the reason on stderr, never as a placeholder image |
+| `gsv.py` | Google Street View (outside China): near / render / sheet, no key, official coverage only; a view that fails to render comes back as nothing with the reason on stderr, never as a placeholder image |
 | `pose.py` | Solve camera position from multiple points: lat/lon, height, heading, pitch, roll, field of view + error radius + per-point check; `check` scores discrete candidate camera positions; `project` projects map points back onto the photo |
 | `terrain.py` | Elevation: view (synthesized mountain view; `--overlay` overlays the skyline on the photo, `--roll`) / profile (skyline) / elev / `ridge` reads ridgeline pixel points from the photo / `scan` filters a whole region along infrastructure lines for "flat nearby + mountain present" points and clusters them / `fit` batch skyline scoring of candidate camera positions (optional infrastructure-distance constraint; outputs overlays of the top N) |
 | `evidence.py` | Evidence image: satellite image + camera-position wedge + comparison panels |

@@ -178,7 +178,7 @@ Draw "camera position → foreground → midground → background → sun" as a 
 
 When a row of evenly spaced things in the frame (viaduct piers, utility poles, streetlights, guardrail posts) lies on a line known on the map, you can solve for how far the camera position is from that line and at how many degrees it looks across it obliquely. Single source (one real case).
 
-1. `imgprep.py piers` reads the pixel column of each structure (it takes a brightness profile along the rows where the structures are and finds peaks); ≥6 of them, and it's fine if the foreground breaks them into several segments.
+1. `imgprep.py piers` reads the pixel column of each structure (it takes a brightness profile along the rows where the structures are, finds peaks, and reports the centre of each peak, so a flat-topped pier is not reported half a pier to the right); ≥6 of them, and it's fine if the foreground breaks them into several segments.
 
 ```bash
 uv run ${CLAUDE_SKILL_DIR}/scripts/imgprep.py piers <image> --rows R0:R1 --out cols.json \

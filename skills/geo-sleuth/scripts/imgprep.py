@@ -101,8 +101,27 @@ def _prominence(d, i: int) -> float:
     return float(h - max(left, lo))
 
 
+def _peak_center(d, i: int) -> float:
+    """Centre of a peak. A pier that is a flat-topped bar has no strict local maximum except at its last
+    column, so reporting the peak index alone biases every pier column by half the pier's width (measured:
+    +4 px on an 8 px bar). Take the middle of the contiguous stretch above half the peak's height: for a
+    flat-topped pier that is the pier's centre, for a tapered one it is the FWHM centre, and for a spike it
+    stays the spike's own column."""
+    h = float(d[i])
+    if h <= 0:
+        return float(i)
+    half = h / 2
+    a = b = i
+    while a > 0 and d[a - 1] >= half:
+        a -= 1
+    while b < len(d) - 1 and d[b + 1] >= half:
+        b += 1
+    return (a + b) / 2
+
+
 def _peaks(d, min_gap: int, min_prominence: float) -> list[tuple[int, float]]:
-    """Find peaks in d: prominence must first pass the threshold, then, from highest to lowest prominence, greedily keep those ≥ min_gap apart."""
+    """Find peaks in d: prominence must first pass the threshold, then, from highest to lowest prominence, greedily keep those ≥ min_gap apart.
+    The returned index is the peak's centre (see _peak_center), which is the column the spacing geometry needs."""
     cand = [i for i in range(1, len(d) - 1) if d[i] >= d[i - 1] and d[i] > d[i + 1]]
     res = [(i, _prominence(d, i)) for i in cand]
     res = [(i, pr) for i, pr in res if pr >= min_prominence]
@@ -110,7 +129,7 @@ def _peaks(d, min_gap: int, min_prominence: float) -> list[tuple[int, float]]:
     keep: list[tuple[int, float]] = []
     for i, pr in res:
         if all(abs(i - j) >= min_gap for j, _ in keep):
-            keep.append((i, pr))
+            keep.append((round(_peak_center(d, i)), pr))
     keep.sort()
     return keep
 
