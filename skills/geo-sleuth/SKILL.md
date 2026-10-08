@@ -158,6 +158,7 @@ Use English for tool messages, report headings and generated labels. Preserve so
 
 - Python 3.10+, `uv`, and `curl`. Always use `uv run ${CLAUDE_SKILL_DIR}/scripts/xxx.py`; each script declares its dependencies. `scripts/` in references is relative to this skill directory.
 - On first setup or after a runtime failure, run `uv run ${CLAUDE_SKILL_DIR}/scripts/doctor.py`; add `--network` to check service reachability. Read the English checks and fixes before starting an expensive scan. It uploads no photos and does not load ML models.
+- If the services are reachable only through a proxy, set `GEO_PROXY` (e.g. `http://127.0.0.1:7890`); every network script uses it, and `--proxy direct` bypasses it for one call. A failed Overpass, Street View or satellite request means "no result was obtained", never "nothing is there".
 - Reverse image search uses local Google Chrome, with automatic fallback to Playwright Chromium (`uvx playwright install chromium`). If neither starts, use `intake.py --no-rev` and report the skipped search. OCR prefers Apple Vision on macOS and uses RapidOCR elsewhere or as a fallback.
 - `match.py` and `sat_scan.py` install ML dependencies and download model weights on first use. Allow extra time and disk space.
 - Cache goes to `.geo-cache/` in the current directory; the candidate board is `board.json` in the current directory. Script list and data sources: `references/data-sources.md`.

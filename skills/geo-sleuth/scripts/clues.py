@@ -464,7 +464,15 @@ def lookup_driving_side(value: str | None, country: str | None) -> dict:
             return _result("driving-side", country, [], src, fetched, "country name not in the table; try the English name")
         k, v = hit
         return _result("driving-side", country, [{"country": k, "side": v["side"], "note": v.get("note", "")}], src, fetched)
-    side = "left" if (value or "").lower().startswith(("l", "左")) else "right"
+    word = (value or "").strip().lower()
+    if word.startswith(("l", "左")):
+        side = "left"
+    elif word.startswith(("r", "右")):
+        side = "right"
+    else:
+        # Any other word used to fall through to "right" and list 160+ countries as if it had matched
+        return _result("driving-side", value or "", [], src, fetched,
+                       "give 'left' or 'right', or --country <country name> for one country")
     ms = [{"country": k, "side": v["side"], "note": v.get("note", "")} for k, v in d.items() if k != "_meta" and v["side"] == side]
     return _result("driving-side", side, ms, src, fetched)
 

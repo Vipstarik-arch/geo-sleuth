@@ -43,11 +43,15 @@ THUMB = ("https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid={id}&cb
 
 
 def _curl(url: str, proxy: str | None, out: Path | None = None) -> bytes:
-    cmd = ["curl", "-q", "-s", "-m", "40", "-A", UA]
+    cmd = ["curl", "-q", "-sS", "-m", "40", "-A", UA]
     cmd += curl_args(proxy)
     if out:
         cmd += ["-o", str(out)]
     r = subprocess.run(cmd + [url], capture_output=True)
+    if r.returncode:
+        # The caller still gets an empty result, but say so: a blocked connection must not look like "no Street View here"
+        reason = " ".join(r.stderr.decode("utf-8", "replace").split())[:200]
+        print(f"gsv: request failed (curl exit {r.returncode}: {reason}); empty result, not evidence of no coverage", file=sys.stderr)
     return r.stdout
 
 

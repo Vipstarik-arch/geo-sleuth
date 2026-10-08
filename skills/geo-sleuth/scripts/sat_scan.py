@@ -246,7 +246,12 @@ def run(points: dict, args) -> None:
     rows.sort(key=lambda r: -r["score"])
     for k, r in enumerate(rows):
         r["rank"] = k + 1
-    print(f"{len(names)} cells; fetch {t1 - t0:.1f}s, scoring {t2 - t1:.1f}s; blank cells {sum(1 for r in rows if r['blank'])}")
+    n_blank = sum(1 for r in rows if r["blank"])
+    print(f"{len(names)} cells; fetch {t1 - t0:.1f}s, scoring {t2 - t1:.1f}s; blank cells {n_blank}")
+    if names and n_blank == len(names):
+        # Every tile missing looks exactly like a scan where nothing matched; say which one it is
+        print("WARNING: every cell is blank, so no satellite tiles were loaded. This is a failed fetch, not a negative result: "
+              "check network access (doctor.py --network) and the tile cache, then rerun.", file=sys.stderr)
     print(f"{'#':>3} {'score':>6}  cell/name          lat,lon")
     for r in rows[: min(args.top, 20)]:
         print(f"{r['rank']:>3} {r['score']:>6.3f}  {str(r['cell'])[:18]:<18} {r['lat']:.5f},{r['lon']:.5f}" + (f"  near {r['seed_near']}" if r["seed_near"] else ""))

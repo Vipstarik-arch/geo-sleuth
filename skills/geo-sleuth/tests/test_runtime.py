@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import http.server
+import io
 import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -168,6 +170,124 @@ class DoctorTests(unittest.TestCase):
             self.assertTrue(report["ok"])
             self.assertNotIn("secret", json.dumps(report))
             self.assertEqual(report["connection"], "configured proxy")
+
+    def test_uv_older_than_the_inline_override_floor_is_flagged(self):
+        self.assertEqual(doctor.uv_version("uv 0.6.0 (x86_64-unknown-linux-gnu)"), (0, 6, 0))
+        self.assertLess(doctor.uv_version("uv 0.5.0"), doctor.UV_MIN)
+        self.assertIsNone(doctor.uv_version("command not found"))
+        old_uv = SimpleNamespace(returncode=0, stdout=b"uv 0.5.0 (abc)\n", stderr=b"")
+        with patch.object(doctor.subprocess, "run", return_value=old_uv), \
+                patch.object(doctor, "browser_check", AsyncMock(return_value=doctor.check("browser", "PASS", "ready"))):
+            report = doctor.diagnose(False, None)
+        uv_row = next(row for row in report["checks"] if row["name"] == "uv")
+        self.assertEqual(uv_row["status"], "WARN")
+        self.assertIn("older than 0.6", uv_row["detail"])
+
+
+class LookupTests(unittest.TestCase):
+    def test_driving_side_rejects_unknown_word_instead_of_defaulting_to_right(self):
+        import clues
+        res = clues.lookup_driving_side("日本", None)
+        self.assertEqual(res["matches"], [])
+        self.assertIn("left", res["note"])
+
+    def test_driving_side_left_right_and_by_country(self):
+        import clues
+        left = clues.lookup_driving_side("left", None)
+        right = clues.lookup_driving_side("right", None)
+        self.assertTrue(left["matches"] and all(m["side"] == "left" for m in left["matches"]))
+        self.assertTrue(right["matches"] and all(m["side"] == "right" for m in right["matches"]))
+        japan = clues.lookup_driving_side(None, "日本")
+        self.assertEqual([m["side"] for m in japan["matches"]], ["left"])
+
+
+class IntakeStatusTests(unittest.TestCase):
+    def test_failure_status_keeps_the_fix_hint_at_the_front(self):
+        import intake
+        message = ("Neither Google Chrome nor Playwright Chromium could start. Run `uvx playwright install chromium` and retry. "
+                   + "chromium: BrowserType.launch: Executable doesn't exist at /x/y " * 10)
+        brief = intake._brief(message)
+        self.assertIn("uvx playwright install chromium", brief)
+        self.assertLessEqual(len(brief), 310)
+        self.assertEqual(intake._brief("short\n  message"), "short message")
+        traceback = ("Traceback (most recent call last):\n  File \"revimg.py\", line 339, in <module>\n    main()\n"
+                     "RuntimeError: Neither Google Chrome nor Playwright Chromium could start. Run `uvx playwright install chromium` and retry. "
+                     + "chromium: Executable doesn't exist " * 10)
+        self.assertIn("uvx playwright install chromium", intake._brief(traceback))
+        self.assertNotIn("Traceback", intake._brief(traceback))
+
+
+class _ZeroScorer:
+    def __init__(self, pos, neg):
+        pass
+
+    def score(self, ims, multi_scale):
+        import numpy as np
+        return np.zeros(len(ims))
+
+
+class SatScanTests(unittest.TestCase):
+    def _run_grid(self, cell_image):
+        import sat_scan
+        args = SimpleNamespace(proxy="direct", cache=None, preset="track", query=None, neg=None, zoom=17, size=320,
+                               source="google", seeds=None, multi_scale=False, seed_radius=500, seed_bonus=0.1,
+                               top=3, out=None, sheet=None, cols=4, heat=None)
+        points = {"r00c00": (23.0, 113.0), "r00c01": (23.0, 113.004)}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {}), \
+                patch.object(sat_scan, "prefetch", lambda *a, **k: None), \
+                patch.object(sat_scan, "cell_image", cell_image), \
+                patch.object(sat_scan, "Scorer", _ZeroScorer), \
+                patch("sys.stdout", new_callable=io.StringIO), \
+                patch("sys.stderr", new_callable=io.StringIO) as err:
+            args.cache = folder
+            sat_scan.run(points, args)
+        return err.getvalue()
+
+    def test_all_blank_cells_say_the_fetch_failed(self):
+        from PIL import Image
+        err = self._run_grid(lambda *a, **k: Image.new("RGB", (320, 320), "gray"))  # missing tiles stay gray
+        self.assertIn("every cell is blank", err)
+
+    def test_real_imagery_gives_no_blank_warning(self):
+        import numpy as np
+        from PIL import Image
+        noise = np.random.default_rng(0).integers(0, 255, (320, 320, 3), dtype=np.uint8)
+        err = self._run_grid(lambda *a, **k: Image.fromarray(noise))
+        self.assertNotIn("every cell is blank", err)
+
+
+class ScriptBehaviourTests(unittest.TestCase):
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+
+    def test_exif_help_prints_usage_and_exits_zero(self):
+        result = subprocess.run([sys.executable, str(self.scripts / "exif.py"), "--help"],
+                                capture_output=True, text=True, encoding="utf-8", timeout=120)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Read photo metadata", result.stdout)
+
+    def test_ocr_header_uses_headless_opencv(self):
+        # rapidocr-onnxruntime pulls opencv-python, whose import needs libGL.so.1 (absent on minimal Linux)
+        header = (self.scripts / "ocr.py").read_text(encoding="utf-8").split('"""', 1)[0]
+        self.assertIn('"opencv-python-headless"', header)
+        self.assertIn("override-dependencies = [\"opencv-python; sys_platform == 'never'\"]", header)
+
+    def test_overpass_failure_message_carries_the_curl_reason(self):
+        import osm
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            closed_port = s.getsockname()[1]  # nothing listens here once the socket is closed
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(osm, "ENDPOINTS", [f"http://127.0.0.1:{closed_port}/api/interpreter"]):
+            with self.assertRaises(SystemExit) as caught:
+                osm.run("[out:json];node(1);out;", None, Path(folder), timeout=5, rounds=1)
+        self.assertIn("curl:", str(caught.exception))
+
+    def test_street_view_failure_is_announced_not_silent(self):
+        import gsv
+        failed = SimpleNamespace(returncode=7, stdout=b"", stderr=b"curl: (7) Failed to connect")
+        with patch.object(gsv.subprocess, "run", return_value=failed), patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(gsv._curl("https://example.invalid/x", "direct"), b"")
+        self.assertIn("curl exit 7", err.getvalue())
 
 
 if __name__ == "__main__":

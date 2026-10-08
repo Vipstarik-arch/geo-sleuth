@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pillow", "pyobjc-framework-Vision; sys_platform == 'darwin'", "pyobjc-framework-Quartz; sys_platform == 'darwin'", "rapidocr-onnxruntime"]
+# dependencies = ["pillow", "pyobjc-framework-Vision; sys_platform == 'darwin'", "pyobjc-framework-Quartz; sys_platform == 'darwin'", "rapidocr-onnxruntime", "opencv-python-headless"]
+#
+# [tool.uv]
+# # rapidocr-onnxruntime depends on opencv-python, whose cv2 import needs libGL.so.1, which minimal Linux
+# # images lack (OCR then fails with "No OCR backend available"). The headless build provides the same cv2
+# # module without that system library.
+# override-dependencies = ["opencv-python; sys_platform == 'never'"]
 # ///
 """Read the text in a photo (second reader): runs once each on the whole image, upscaled, and in tiles; merges and dedupes; marks which text was only readable after zooming.
 
