@@ -60,6 +60,18 @@ def _script(name: str) -> str:
     return str(HERE / name)
 
 
+def _brief(text: str, limit: int = 300) -> str:
+    """One line for the status list. A traceback is reduced to its last line (exception type and message, where the fix is);
+    a longer line keeps its head and tail, so "Run `uvx playwright install chromium`" survives the cut."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if lines and lines[0].startswith("Traceback"):
+        lines = lines[-1:]
+    text = " ".join(lines)
+    if len(text) <= limit:
+        return text
+    return text[: limit // 2] + " … " + text[-(limit // 2):]
+
+
 GENERIC = ("城市街道", "城市", "街道", "市区", "街景", "建筑", "楼房", "高楼", "夜景", "风景", "天空", "道路", "马路", "小镇", "乡村", "都市",
            "city", "street", "town", "building", "skyline", "road", "urban")
 KNOWN_CITIES_EN = ("hong kong", "kowloon", "tokyo", "osaka", "kyoto", "seoul", "bangkok", "singapore", "kuala lumpur", "taipei", "shanghai",
@@ -148,7 +160,7 @@ def main() -> None:
         t0 = time.time()
         try:
             res = fn()
-            status[name] = "ok" if res[0] == 0 else f"failed: {(res[2] or res[1])[-300:].strip()}"
+            status[name] = "ok" if res[0] == 0 else f"failed: {_brief(res[2] or res[1])}"
         except Exception as e:  # noqa: BLE001
             status[name] = f"exception: {e}"
             res = (1, "", str(e))

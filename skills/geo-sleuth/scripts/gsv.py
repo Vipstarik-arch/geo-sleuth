@@ -43,11 +43,15 @@ THUMB = ("https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid={id}&cb
 
 
 def _curl(url: str, proxy: str | None, out: Path | None = None) -> bytes:
-    cmd = ["curl", "-q", "-s", "-m", "40", "-A", UA]
+    cmd = ["curl", "-q", "-sS", "-f", "-m", "40", "-A", UA]      # -f: an HTTP error is a failure, not a body to parse
     cmd += curl_args(proxy)
     if out:
         cmd += ["-o", str(out)]
     r = subprocess.run(cmd + [url], capture_output=True)
+    if r.returncode:
+        # The caller still gets an empty result, but say so: a blocked connection must not look like "no Street View here"
+        reason = " ".join(r.stderr.decode("utf-8", "replace").split())[:200]
+        print(f"gsv: request failed (curl exit {r.returncode}: {reason}); empty result, not evidence of no coverage", file=sys.stderr)
     return r.stdout
 
 
@@ -112,16 +116,31 @@ def pick_date(res: dict, date: str) -> dict | None:
 
 
 def render(pid: str, heading: float, pitch: float, fov: float, w: int, h: int, proxy: str | None,
-           cache: Path) -> Image.Image:
-    """heading: compass bearing; positive pitch = looking up; fov: horizontal field of view."""
+           cache: Path) -> Image.Image | None:
+    """heading: compass bearing; positive pitch = looking up; fov: horizontal field of view.
+
+    Returns None when the view could not be rendered (no coverage, an id the perspective endpoint cannot
+    render, or a failed request). A grey placeholder would be ranked by match.py as if it were imagery of
+    the place, so callers must skip a None instead."""
     cache.mkdir(parents=True, exist_ok=True)
     p = cache / f"{pid}_{heading:.0f}_{pitch:.0f}_{fov:.0f}_{w}x{h}.jpg"
+    if p.exists() and p.stat().st_size > 2000:
+        try:
+            return Image.open(p).convert("RGB")
+        except Exception:  # noqa: BLE001 — a truncated cache file must not fail every later run
+            p.unlink(missing_ok=True)
+    _curl(THUMB.format(id=pid, w=w, h=h, yaw=heading % 360, pitch=-pitch, fov=fov), proxy, p)
     if not (p.exists() and p.stat().st_size > 2000):
-        _curl(THUMB.format(id=pid, w=w, h=h, yaw=heading % 360, pitch=-pitch, fov=fov), proxy, p)
+        p.unlink(missing_ok=True)                      # _curl already printed the curl reason when the request failed
+        print(f"gsv: no image rendered for {pid} (heading {heading:.0f}°); the id may be wrong, or a user-uploaded "
+              "panorama the perspective endpoint cannot render", file=sys.stderr)
+        return None
     try:
         return Image.open(p).convert("RGB")
     except Exception:  # noqa: BLE001
-        return Image.new("RGB", (w, h), "gray")
+        p.unlink(missing_ok=True)
+        print(f"gsv: the answer for {pid} was not an image (removed it from the cache); rerun later or check the id", file=sys.stderr)
+        return None
 
 
 def sheet(items: list[dict], out: Path, proxy: str | None, cache: Path, cols: int = 3, tw: int = 480, th: int = 360) -> None:
@@ -132,12 +151,22 @@ def sheet(items: list[dict], out: Path, proxy: str | None, cache: Path, cols: in
     S = Image.new("RGB", (cols * tw, max(1, rows) * th), "black")
     d = ImageDraw.Draw(S)
     f = _font(16)
+    failed = 0
     for i, (it, im) in enumerate(zip(items, ims)):
         x, y = (i % cols) * tw, (i // cols) * th
-        S.paste(im.resize((tw, th)), (x, y))
+        label = it.get("label") or f"{i}: …{it['id'][-8:]} h{it['heading']:.0f}"
+        if im is None:
+            failed += 1
+            d.rectangle([x, y, x + tw, y + th], fill=(30, 30, 30), outline=(160, 40, 40), width=2)
+            d.text((x + 8, y + th // 2 - 10), "no image: see stderr", fill=(230, 120, 120), font=f)
+        else:
+            S.paste(im.resize((tw, th)), (x, y))
         d.rectangle([x, y, x + tw, y + 22], fill="black")
-        d.text((x + 4, y + 2), it.get("label") or f"{i}: …{it['id'][-8:]} h{it['heading']:.0f}", fill="yellow", font=f)
+        d.text((x + 4, y + 2), label, fill="yellow", font=f)
     S.save(out, quality=88)
+    if failed:
+        print(f"WARNING gsv: {failed}/{len(items)} tiles of {out.name} have no image (marked \"no image\" in the sheet); "
+              "a missing tile is a failed render, not evidence of no coverage", file=sys.stderr)
 
 
 
@@ -195,7 +224,11 @@ def main() -> None:
         res = near(lat, lon, args.radius, args.proxy)
         print(json.dumps(res, ensure_ascii=False, indent=1) if res else "no usable Google Street View result (increase --radius, check coverage, or run doctor.py --network to check service access)")
     elif args.cmd == "render":
-        render(args.id, args.heading, args.pitch, args.fov, args.width, args.height, args.proxy, args.cache).save(args.out)
+        im = render(args.id, args.heading, args.pitch, args.fov, args.width, args.height, args.proxy, args.cache)
+        if im is None:
+            sys.exit(f"could not render {args.id}: no image came back (check the id, the coverage and doctor.py --network); "
+                     "the file was not written")
+        im.save(args.out)
         print(args.out)
     else:
         panos: dict[str, dict] = {}

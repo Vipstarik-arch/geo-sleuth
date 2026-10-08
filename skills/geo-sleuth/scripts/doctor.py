@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,15 @@ SERVICES = {
     "Elevation tiles": "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/0/0/0.png",
     "Hugging Face": "https://huggingface.co/",
 }
+
+
+# ocr.py declares its OpenCV override in an inline [tool.uv] table: uv 0.5 rejects that table, uv 0.6 accepts it
+UV_MIN = (0, 6, 0)
+
+
+def uv_version(text: str) -> tuple[int, int, int] | None:
+    match = re.match(r"\s*uv (\d+)\.(\d+)\.(\d+)", text)
+    return tuple(int(part) for part in match.groups()) if match else None
 
 
 def check(name: str, status: str, detail: str, fix: str = "") -> dict:
@@ -89,8 +99,15 @@ def diagnose(network: bool, proxy: str | None) -> dict:
         try:
             result = subprocess.run([found or tool, "--version"], capture_output=True, timeout=5)
             ok = result.returncode == 0
+            version_text = result.stdout.decode("utf-8", "replace")
         except (OSError, subprocess.TimeoutExpired):
-            ok = False
+            ok, version_text = False, ""
+        version = uv_version(version_text) if tool == "uv" and ok else None
+        if version is not None and version < UV_MIN:
+            rows.append(check(tool, "WARN", f"uv {'.'.join(map(str, version))} is older than {'.'.join(map(str, UV_MIN[:2]))}: "
+                              "ocr.py cannot start with it (its inline [tool.uv] table is a parse error there).",
+                              "Update uv: `uv self update`, or reinstall from https://docs.astral.sh/uv/ and reopen your terminal."))
+            continue
         rows.append(check(tool, "PASS" if ok else "FAIL", "Available." if ok else "Not runnable.",
                           "" if ok else f"Install {tool} and reopen your terminal so it is on PATH."))
     try:

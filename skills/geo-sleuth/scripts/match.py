@@ -223,6 +223,9 @@ def _load_candidates(args) -> tuple[list[dict], list[Image.Image]]:
         items = _items_from_panos(args)
     else:
         sys.exit("candidate source: pick one of --images / --items / --panos")
+    if not items:
+        # an empty --items file used to blow up on items[0] below with an IndexError instead of saying what is wrong
+        sys.exit("0 candidates: --items is an empty list, or --panos/--within selected no panorama (widen the radius or check the ids)")
     if len(items) > args.max_candidates:
         if args.toward and all(it.get("wgs") for it in items):
             tgt = tuple(float(v) for v in args.toward.split(","))

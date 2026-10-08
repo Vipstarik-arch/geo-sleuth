@@ -133,23 +133,41 @@ def sample(bbox: tuple[float, float, float, float], n: int, spread_m: float, see
 
 
 def render(pid: str, heading: float, pitch: float = 10, fov: float = 80,
-           w: int = 1024, h: int = 768, cache: Path | None = None, proxy: str | None = None) -> Image.Image:
-    """Render a perspective view at a compass heading. heading 0 = north, positive pitch = looking up, fov is the vertical field of view. Max width 1024."""
+           w: int = 1024, h: int = 768, cache: Path | None = None, proxy: str | None = None) -> Image.Image | None:
+    """Render a perspective view at a compass heading. heading 0 = north, positive pitch = looking up, fov is the vertical field of view. Max width 1024.
+
+    Returns None when the view could not be rendered (no coverage at this panoid, a failed request, or an
+    unusable answer). A grey placeholder would enter the similarity ranking as if it were imagery of the
+    place, so callers must skip a None instead of showing it."""
     w = min(w, 1024)
     key = f"{pid}_{heading:.0f}_{pitch:.0f}_{fov:.0f}_{w}x{h}.jpg"
+    p = (cache / key) if cache else None
     if cache:
         cache.mkdir(parents=True, exist_ok=True)
-        if (cache / key).exists():
-            return Image.open(cache / key)
+    if p and p.exists():
+        try:
+            im = Image.open(p)
+            im.load()
+            return im
+        except Exception:                       # a truncated cache file must not fail every later run
+            p.unlink(missing_ok=True)
     url = (f"{API}?qt=pr3d&fovy={fov:.0f}&quality=80&panoid={pid}&heading={heading:.1f}"
            f"&pitch={pitch:.1f}&width={w}&height={h}")
     try:
         data = _get(url, 40, proxy)
-    except Exception:
-        return Image.new("RGB", (w, h), "gray")
-    if cache:
-        (cache / key).write_bytes(data)
-    return Image.open(io.BytesIO(data))
+    except Exception as e:  # noqa: BLE001
+        print(f"baidu_pano: render failed for {pid} ({e}); this is not evidence that the panorama is absent", file=sys.stderr)
+        return None
+    try:
+        im = Image.open(io.BytesIO(data))
+        im.load()
+    except Exception:  # noqa: BLE001
+        print(f"baidu_pano: render of {pid} did not return an image ({len(data)} bytes; wrong panoid, or the endpoint "
+              "modelled user-uploaded panoramas differently)", file=sys.stderr)
+        return None
+    if p:
+        p.write_bytes(data)
+    return im
 
 
 def _font(size: int):
@@ -174,13 +192,22 @@ def sheet(items: list[dict], out: Path, cols: int = 3, tw: int = 480, th: int = 
     S = Image.new("RGB", (cols * tw, rows * th), "black")
     d = ImageDraw.Draw(S)
     f = _font(16)
+    failed = 0
     for i, (it, im) in enumerate(zip(items, ims)):
         x, y = (i % cols) * tw, (i // cols) * th
-        S.paste(im.convert("RGB").resize((tw, th)), (x, y))
         text = it.get("label") or f"{i}: …{it['id'][-9:]} h{it['heading']:.0f}"
+        if im is None:
+            failed += 1
+            d.rectangle([x, y, x + tw, y + th], fill=(30, 30, 30), outline=(160, 40, 40), width=2)
+            d.text((x + 8, y + th // 2 - 10), "no image: see stderr", fill=(230, 120, 120), font=f)
+        else:
+            S.paste(im.convert("RGB").resize((tw, th)), (x, y))
         d.rectangle([x, y, x + tw, y + 22], fill="black")
         d.text((x + 4, y + 2), text, fill="yellow", font=f)
     S.save(out, quality=88)
+    if failed:
+        print(f"WARNING baidu_pano: {failed}/{len(items)} tiles of {out.name} have no image (marked \"no image\" in the sheet); "
+              "a missing tile is a failed render, not evidence of no coverage", file=sys.stderr)
 
 
 
@@ -272,7 +299,11 @@ def main() -> None:
         args.out.write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"{len(res)} panos -> {args.out}")
     elif args.cmd == "render":
-        render(args.id, args.heading, args.pitch, args.fov, cache=args.cache, proxy=args.proxy).save(args.out)
+        im = render(args.id, args.heading, args.pitch, args.fov, cache=args.cache, proxy=args.proxy)
+        if im is None:
+            sys.exit(f"could not render {args.id}: no image came back (check the id, the coordinate system of the "
+                     "heading, and doctor.py --network); the file was not written")
+        im.save(args.out)
         print(args.out)
     elif args.cmd == "sheet":
         if args.spec:

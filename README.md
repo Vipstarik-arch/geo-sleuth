@@ -189,7 +189,7 @@ The method comes from breaking down 14 videos by online-geolocation creators, 22
 
 ## Requirements and setup
 
-You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/), `curl`, and an agent that can run shell commands. Each script declares its own dependencies; use `uv run`, which installs them on first use. Keep the complete skill folder, including `data/` and the helper modules in `scripts/`.
+You need Python 3.10+, [`uv`](https://docs.astral.sh/uv/) 0.6 or newer, `curl`, and an agent that can run shell commands. Each script declares its own dependencies; use `uv run`, which installs them on first use. Keep the complete skill folder, including `data/` and the helper modules in `scripts/`.
 
 Reverse image search requires **Google Chrome or Playwright Chromium**. The scripts try Chrome first and automatically fall back to Chromium. If neither is installed:
 
@@ -207,6 +207,8 @@ uv run skills/geo-sleuth/scripts/doctor.py --network
 ```
 
 For an installed skill, use its actual `scripts/doctor.py` path, or ask your agent to run it. The local check tests Python, uv, curl, bundled lookup tables, a writable working directory and an actual browser launch. `--network` also probes the services without uploading photos. `--json` produces machine-readable diagnostics. Exit code 1 means a failed check; warnings identify optional features that may not work. uv may fetch Playwright on the first run; doctor does not load OCR or ML models. Passing an endpoint probe does not guarantee image uploads, model downloads, imagery coverage or freedom from CAPTCHAs.
+
+Behind a firewall or a proxy? Set `GEO_PROXY` (for example `export GEO_PROXY=http://127.0.0.1:7890` or `socks5h://127.0.0.1:1080`) and the network scripts use it, model downloads from Hugging Face included. Pass `--proxy direct` to bypass it for one run. Then run `doctor.py --network` to see which services answer through the route you chose.
 
 To check the local processing pipeline on your own image before using online search:
 

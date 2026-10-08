@@ -188,7 +188,7 @@ flowchart LR
 
 ## 环境要求
 
-需要 Python 3.10+、[`uv`](https://docs.astral.sh/uv/)、`curl`，以及能运行 shell 命令的 agent。每个脚本声明自己的依赖，用 `uv run` 首次运行时安装；安装时保留完整 skill 文件夹，包括 `data/` 和 `scripts/` 中的辅助模块。
+需要 Python 3.10+、[`uv`](https://docs.astral.sh/uv/) 0.6 及以上版本、`curl`，以及能运行 shell 命令的 agent。每个脚本声明自己的依赖，用 `uv run` 首次运行时安装；安装时保留完整 skill 文件夹，包括 `data/` 和 `scripts/` 中的辅助模块。
 
 以图搜图需要 **Google Chrome 或 Playwright Chromium**，先尝试 Chrome，启动失败则回退到 Chromium。两者都没有时运行 `uvx playwright install chromium`。Linux 缺少系统库时可用 `uvx playwright install --with-deps chromium`；Playwright 升级后若提示缺少浏览器可执行文件，重新运行安装命令。
 
@@ -200,6 +200,8 @@ uv run skills/geo-sleuth/scripts/doctor.py --network
 ```
 
 已安装 skill 时换成其实际的 `scripts/doctor.py` 路径，或让 agent 运行。自检会检查 Python、uv、curl、查表数据、当前目录写权限，以及浏览器能否实际启动。`--network` 额外探测各服务，不上传照片；`--json` 输出诊断数据。退出码 1 表示有失败项，警告表示部分可选功能受影响。首次运行 uv 可能需要安装 Playwright；自检不加载 OCR 或 ML 模型。网站可达不等于识图上传、模型下载和街景查询一定成功。
+
+在防火墙或代理后面？设置 `GEO_PROXY`（例如 `export GEO_PROXY=http://127.0.0.1:7890` 或 `socks5h://127.0.0.1:1080`），联网脚本都会使用它，包括从 Hugging Face 下载模型。单次运行想绕过时加 `--proxy direct`。之后运行 `doctor.py --network`，看哪些服务能通过你选的路由访问。
 
 先用自己的照片检查本地处理流程：
 

@@ -69,6 +69,9 @@ def read(path: Path) -> dict:
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        return
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     for p in sys.argv[1:]:

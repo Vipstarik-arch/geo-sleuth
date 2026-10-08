@@ -57,21 +57,48 @@ R_EARTH = 6371008.8
 K_REFRACTION = 0.13
 
 
-def _fetch(z: int, x: int, y: int, cache: Path, proxy: str | None) -> np.ndarray:
+def _fetch(z: int, x: int, y: int, cache: Path, proxy: str | None) -> tuple[np.ndarray, str]:
+    """One Terrarium tile as an elevation array, plus a reason when it could not be obtained ("" on success).
+
+    The reason matters: a missing tile is padded with 0 m, which is indistinguishable from flat ground at sea
+    level, so a failed download must not reach the caller as ordinary terrain data. See _report_tiles."""
     p = cache / f"terrarium_{z}_{x}_{y}.png"
     if not (p.exists() and p.stat().st_size > 100):
-        cmd = ["curl", "-q", "-s", "-m", "60", "-o", str(p), TILE.format(z=z, x=x, y=y)]
+        # -sS: keep curl's own error text (DNS, connection refused, TLS) instead of an empty reason
+        cmd = ["curl", "-q", "-sS", "-m", "60", "-o", str(p), TILE.format(z=z, x=x, y=y)]
         cmd += curl_args(proxy)
-        subprocess.run(cmd, check=False)
+        r = subprocess.run(cmd, capture_output=True)
+        if r.returncode:
+            reason = " ".join(r.stderr.decode("utf-8", "replace").split())[:200] or f"curl exit {r.returncode}"
+            p.unlink(missing_ok=True)                       # never leave a partial file where the size check would accept it
+            return np.zeros((256, 256), dtype=np.float32), reason
     try:
         a = np.asarray(Image.open(p).convert("RGB"), dtype=np.float32)
-    except Exception:  # noqa: BLE001
-        return np.zeros((256, 256), dtype=np.float32)
-    return a[..., 0] * 256 + a[..., 1] + a[..., 2] / 256 - 32768
+    except Exception as e:  # noqa: BLE001
+        p.unlink(missing_ok=True)                           # drop the bad file so the next run re-downloads instead of failing forever
+        return np.zeros((256, 256), dtype=np.float32), f"cached tile unreadable, removed for a fresh download ({e})"
+    return a[..., 0] * 256 + a[..., 1] + a[..., 2] / 256 - 32768, ""
+
+
+def _report_tiles(failed: int, total: int, first_error: str, what: str) -> None:
+    """Say out loud what the 0 m padding means. A fully failed fetch exits: every skyline from such a DEM is
+    built from no data and would still look like a valid flat horizon (a failed fetch, not "nothing is there")."""
+    if not failed:
+        return
+    detail = f" (first error: {first_error})" if first_error else ""
+    print(f"WARNING terrain: {failed}/{total} elevation tiles of {what} could not be loaded{detail}. "
+          "Those areas read as sea level 0 m, so any skyline over them is missing data, not flat ground.", file=sys.stderr)
+    if failed == total:
+        sys.exit(f"No elevation tile of {what} could be loaded{detail}. Stopping instead of reporting a flat 0 m horizon "
+                 "built from no data: check the network or the proxy (doctor.py --network), and that the tile cache is writable; then rerun.")
 
 
 class DEM:
-    """Elevation mosaic indexed by Web Mercator pixels."""
+    """Elevation mosaic indexed by Web Mercator pixels.
+
+    Tiles that failed to download stay 0 m, which is exactly what flat ground at sea level looks like, so the
+    failure is counted and reported by _report_tiles; total failure exits rather than answering from no data.
+    """
 
     def __init__(self, center: tuple[float, float], radius_m: float, zoom: int, cache: Path, proxy: str | None):
         cache.mkdir(parents=True, exist_ok=True)
@@ -86,9 +113,14 @@ class DEM:
             sys.exit(f"Area too large ({nx}x{ny} tiles); reduce --range or lower --zoom")
         self.h = np.zeros((ny * 256, nx * 256), dtype=np.float32)
         jobs = [(x, y) for y in range(self.ty0, ty1 + 1) for x in range(self.tx0, tx1 + 1)]
+        self.total_tiles, self.failed_tiles, self.first_error = len(jobs), 0, ""
         with ThreadPoolExecutor(16) as ex:
-            for (x, y), arr in zip(jobs, ex.map(lambda t: _fetch(zoom, t[0], t[1], cache, proxy), jobs)):
+            for (x, y), (arr, err) in zip(jobs, ex.map(lambda t: _fetch(zoom, t[0], t[1], cache, proxy), jobs)):
+                if err:
+                    self.failed_tiles += 1
+                    self.first_error = self.first_error or err
                 self.h[(y - self.ty0) * 256:(y - self.ty0 + 1) * 256, (x - self.tx0) * 256:(x - self.tx0 + 1) * 256] = arr
+        _report_tiles(self.failed_tiles, self.total_tiles, self.first_error, f"the z{zoom} DEM around {center[0]:.5f},{center[1]:.5f}")
 
     def sample(self, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
         n = 256 * 2 ** self.z
@@ -210,7 +242,7 @@ def _haversine(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 class _Mosaic:
-    """A large mosaic stitched from a batch of Terrarium tiles, nearest-neighbor sampling. Tiles that failed to download stay 0 (treated as sea level)."""
+    """A large mosaic stitched from a batch of Terrarium tiles, nearest-neighbor sampling. Tiles that failed to download stay 0 (treated as sea level), counted and reported by _report_tiles."""
 
     def __init__(self, need: set[tuple[int, int]], zoom: int, cache: Path, proxy: str | None, threads: int):
         cache.mkdir(parents=True, exist_ok=True)
@@ -224,13 +256,19 @@ class _Mosaic:
         self.h = np.zeros((ny * 256, nx * 256), dtype=np.int16)
         jobs = sorted(need)
         done = 0
+        self.total_tiles, self.failed_tiles, self.first_error = len(jobs), 0, ""
         with ThreadPoolExecutor(threads) as ex:
-            for (x, y), arr in zip(jobs, ex.map(lambda t: _fetch(zoom, t[0], t[1], cache, proxy), jobs)):
+            for (x, y), (arr, err) in zip(jobs, ex.map(lambda t: _fetch(zoom, t[0], t[1], cache, proxy), jobs)):
+                if err:
+                    self.failed_tiles += 1
+                    self.first_error = self.first_error or err
                 self.h[(y - self.ty0) * 256:(y - self.ty0 + 1) * 256,
                        (x - self.tx0) * 256:(x - self.tx0 + 1) * 256] = np.clip(arr, -500, 9000).astype(np.int16)
                 done += 1
                 if done % 200 == 0:
                     print(f"  tiles {done}/{len(jobs)}", file=sys.stderr)
+        _report_tiles(self.failed_tiles, self.total_tiles, self.first_error,
+                      f"the z{zoom} region mosaic ({nx}x{ny} tiles)")
 
     def sample(self, lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
         n = 256 * 2 ** self.z
@@ -393,6 +431,8 @@ def _cmd_scan(args) -> None:
                    "eye_m": args.eye, "az_step_deg": az_step, "dist_m": dist.tolist(),
                    "skip_tag": [f"{k}={v}" for k, v in skip], "cluster_km": args.cluster_km},
         "n_samples": len(pts), "n_hits": len(hits), "n_clusters": len(clusters),
+        # how much of the DEM actually arrived: a hit list computed with missing tiles is missing candidates, not empty land
+        "elevation_tiles": {"total": mos.total_tiles, "failed": mos.failed_tiles, "first_error": mos.first_error or None},
         "hits": hits, "clusters": clusters,
     }
     Path(args.out).write_text(json.dumps(out, ensure_ascii=False, indent=0), encoding="utf-8")
@@ -686,7 +726,9 @@ def _cmd_fit(args) -> None:
         try:
             dem = DEM((lat, lon), args.radius + args.range + 500, args.zoom, args.cache, args.proxy)
         except SystemExit as e:
+            # DEM exits when no elevation tile could be fetched; count it so it shows up in n_skipped instead of vanishing
             print(f"cluster {c['src_idx']} {name}: DEM failed ({e}), skipped", file=sys.stderr)
+            skipped["no_dem"] = skipped.get("no_dem", 0) + 1
             continue
         kx = 111320 * math.cos(math.radians(lat))
         sub = None
@@ -1075,8 +1117,12 @@ Output JSON (--out):
         step = max(1, args.width // 180)
         out = [{"azimuth": round(float(az[i] % 360), 2), "skyline_deg": round(float(runmax[i]), 3), "skyline_dist_m": round(float(far[i]))}
                for i in range(0, args.width, step)]
-        args.out.write_text(json.dumps({"at": [lat, lon], "eye_alt_m": round(eye, 1), "ground_m": round(ground, 1), "profile": out}, indent=1), encoding="utf-8")
-        print(f"ground {ground:.0f} m, eye height {eye:.0f} m → {args.out}")
+        args.out.write_text(json.dumps({"at": [lat, lon], "eye_alt_m": round(eye, 1), "ground_m": round(ground, 1),
+                                        "elevation_tiles": {"total": dem.total_tiles, "failed": dem.failed_tiles,
+                                                            "first_error": dem.first_error or None},
+                                        "profile": out}, indent=1), encoding="utf-8")
+        missing = f"; WARNING {dem.failed_tiles}/{dem.total_tiles} elevation tiles missing, those azimuths carry no data" if dem.failed_tiles else ""
+        print(f"ground {ground:.0f} m, eye height {eye:.0f} m → {args.out}{missing}")
         return
 
     vfov = args.vfov or 2 * math.degrees(math.atan(math.tan(math.radians(args.hfov / 2)) * 2 / 3))

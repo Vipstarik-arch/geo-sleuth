@@ -68,7 +68,8 @@ def run(ql: str, proxy: str | None, cache: Path, timeout: int = 180, rounds: int
     last = ""
     for rnd in range(rounds):
         for ep in ENDPOINTS:
-            cmd = ["curl", "-q", "-s", "-m", str(timeout + 30), "--data-urlencode", f"data={ql}", ep]
+            # -sS: keep curl's own error text (DNS, connection refused, timeout) so the final message says why it failed
+            cmd = ["curl", "-q", "-sS", "-m", str(timeout + 30), "--data-urlencode", f"data={ql}", ep]
             cmd += curl_args(proxy)
             r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
             try:

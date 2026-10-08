@@ -25,7 +25,10 @@ def fetch_bytes(url: str, proxy: str | None = None, timeout: int = 20,
         cmd += ["-H", f"{name}: {value}"]
     result = subprocess.run(cmd + [url], capture_output=True, timeout=timeout + 5)
     if result.returncode:
-        raise RuntimeError(f"Request failed (curl exit {result.returncode}); run doctor.py --network to check connectivity.")
+        # -sS keeps curl's error text: without the reason, "Request failed" doesn't say whether it was DNS, TLS or the proxy
+        reason = " ".join(result.stderr.decode("utf-8", "replace").split())[:200]
+        raise RuntimeError(f"Request failed (curl exit {result.returncode}"
+                           + (f": {reason}" if reason else "") + "); run doctor.py --network to check connectivity.")
     return result.stdout
 
 
